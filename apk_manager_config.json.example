@@ -1,0 +1,4 @@
+{
+  "feed_url": "https://example.com/apks/apk-feed.php",
+  "auth_token": "change-this-token-before-deploying"
+}

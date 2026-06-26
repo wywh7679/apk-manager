@@ -23,3 +23,14 @@ The executable will be created at `dist\APK Manager.exe`.
 5. Click **Install APK**.
 
 The app shows install progress and the `adb install` output in the log panel.
+
+## Remote APK feed
+
+The app can also populate a dropdown from a PHP JSON feed. When a user selects a remote APK, the app downloads that APK through the PHP script and installs the downloaded file.
+
+1. Copy `server/apk-feed.php` to the same web-server folder that contains the `.apk` files.
+2. Change `APK_MANAGER_TOKEN` in `server/apk-feed.php` to a private value.
+3. Copy `apk_manager_config.json.example` to `apk_manager_config.json` next to `APK Manager.exe`.
+4. Set `feed_url` to the deployed PHP URL and `auth_token` to the same token used by the PHP script.
+
+The token is sent automatically by the app in request headers for both the JSON list and APK downloads, so users do not need to enter it in the GUI. Use HTTPS for the feed URL so the token and APK downloads are protected in transit.
