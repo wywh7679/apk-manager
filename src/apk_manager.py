@@ -6,10 +6,25 @@ import queue
 import subprocess
 import threading
 import tkinter as tk
+from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from typing import Callable
 
 ADB_COMMAND = "adb"
+UNKNOWN_DEVICE_NAME = "Android device"
+
+
+@dataclass(frozen=True)
+class AndroidDevice:
+    """Display and install metadata for one authorized adb device."""
+
+    serial: str
+    name: str
+
+    @property
+    def label(self) -> str:
+        return f"{self.name} ({self.serial})"
 
 
 class ApkManagerApp(tk.Tk):
@@ -22,9 +37,9 @@ class ApkManagerApp(tk.Tk):
         self.minsize(680, 460)
 
         self.apk_path = tk.StringVar()
-        self.selected_device = tk.StringVar()
+        self.selected_device_label = tk.StringVar()
         self.status_text = tk.StringVar(value="Ready")
-        self.devices: list[str] = []
+        self.devices: list[AndroidDevice] = []
         self.log_queue: queue.Queue[str] = queue.Queue()
 
         self._build_ui()
@@ -43,9 +58,9 @@ class ApkManagerApp(tk.Tk):
 
         self.device_combo = ttk.Combobox(
             device_frame,
-            textvariable=self.selected_device,
+            textvariable=self.selected_device_label,
             state="readonly",
-            values=self.devices,
+            values=[],
         )
         self.device_combo.grid(row=0, column=0, sticky="ew", padx=(10, 6), pady=10)
 
@@ -105,33 +120,64 @@ class ApkManagerApp(tk.Tk):
         self._run_background(self._refresh_devices_worker)
 
     def _refresh_devices_worker(self) -> None:
-        result = self._run_adb(["devices"])
+        result = self._run_adb(["devices", "-l"])
         if result.returncode != 0:
             self._queue_log("Unable to list devices. Is adb installed and on PATH?\n")
             self._queue_log(result.stderr or result.stdout)
             self.after(0, self._update_devices, [])
             return
 
-        devices = parse_adb_devices(result.stdout)
+        devices = [
+            AndroidDevice(serial=serial, name=self._lookup_device_name(serial, metadata))
+            for serial, metadata in parse_adb_devices(result.stdout)
+        ]
         self.after(0, self._update_devices, devices)
 
-    def _update_devices(self, devices: list[str]) -> None:
+    def _lookup_device_name(self, serial: str, metadata: dict[str, str]) -> str:
+        device_name = self._read_device_value(
+            serial,
+            ["shell", "settings", "get", "global", "device_name"],
+        )
+        if is_known_device_name(device_name):
+            return device_name
+
+        model = self._read_device_value(serial, ["shell", "getprop", "ro.product.model"])
+        if is_known_device_name(model):
+            return model
+
+        metadata_model = metadata.get("model", "").replace("_", " ").strip()
+        if is_known_device_name(metadata_model):
+            return metadata_model
+
+        return UNKNOWN_DEVICE_NAME
+
+    def _read_device_value(self, serial: str, args: list[str]) -> str:
+        result = self._run_adb(["-s", serial, *args], timeout=5)
+        if result.returncode == 0:
+            return result.stdout.strip()
+        return ""
+
+    def _update_devices(self, devices: list[AndroidDevice]) -> None:
+        previously_selected = self.selected_device_label.get()
         self.devices = devices
-        self.device_combo.configure(values=self.devices)
+        labels = [device.label for device in self.devices]
+        self.device_combo.configure(values=labels)
         if devices:
-            if self.selected_device.get() not in devices:
-                self.selected_device.set(devices[0])
+            if previously_selected in labels:
+                self.selected_device_label.set(previously_selected)
+            else:
+                self.selected_device_label.set(labels[0])
             self.status_text.set(f"Found {len(devices)} device(s)")
-            self._queue_log(f"Found devices: {', '.join(devices)}\n")
+            self._queue_log(f"Found devices: {', '.join(labels)}\n")
         else:
-            self.selected_device.set("")
+            self.selected_device_label.set("")
             self.status_text.set("No authorized devices found")
             self._queue_log("No authorized devices found. Check USB debugging authorization.\n")
         self._set_busy(False)
 
     def install_apk(self) -> None:
         apk = Path(self.apk_path.get())
-        device = self.selected_device.get()
+        device = self._selected_device()
 
         if not device:
             messagebox.showerror("No device selected", "Select an Android device first.")
@@ -141,11 +187,15 @@ class ApkManagerApp(tk.Tk):
             return
 
         self._set_busy(True, "Installing APK...")
-        self._queue_log(f"Installing {apk} on {device}...\n")
+        self._queue_log(f"Installing {apk} on {device.label}...\n")
         self._run_background(lambda: self._install_apk_worker(device, apk))
 
-    def _install_apk_worker(self, device: str, apk: Path) -> None:
-        result = self._run_adb(["-s", device, "install", "-r", str(apk)])
+    def _selected_device(self) -> AndroidDevice | None:
+        selected_label = self.selected_device_label.get()
+        return next((device for device in self.devices if device.label == selected_label), None)
+
+    def _install_apk_worker(self, device: AndroidDevice, apk: Path) -> None:
+        result = self._run_adb(["-s", device.serial, "install", "-r", str(apk)])
         self._queue_log(result.stdout)
         self._queue_log(result.stderr)
         if result.returncode == 0:
@@ -161,15 +211,33 @@ class ApkManagerApp(tk.Tk):
         else:
             messagebox.showerror("Install failed", "See the log panel for adb output.")
 
-    def _run_adb(self, args: list[str]) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [ADB_COMMAND, *args],
-            capture_output=True,
-            check=False,
-            text=True,
-        )
+    def _run_adb(
+        self,
+        args: list[str],
+        timeout: int | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                [ADB_COMMAND, *args],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=timeout,
+            )
+        except FileNotFoundError as error:
+            return subprocess.CompletedProcess(
+                args=[ADB_COMMAND, *args],
+                returncode=1,
+                stderr=str(error),
+            )
+        except subprocess.TimeoutExpired as error:
+            return subprocess.CompletedProcess(
+                args=[ADB_COMMAND, *args],
+                returncode=1,
+                stderr=str(error),
+            )
 
-    def _run_background(self, target) -> None:  # type: ignore[no-untyped-def]
+    def _run_background(self, target: Callable[[], None]) -> None:
         thread = threading.Thread(target=target, daemon=True)
         thread.start()
 
@@ -197,14 +265,30 @@ class ApkManagerApp(tk.Tk):
         self.after(100, self._drain_log_queue)
 
 
-def parse_adb_devices(output: str) -> list[str]:
-    """Return serials for devices in the adb 'device' state."""
-    devices: list[str] = []
+def parse_adb_devices(output: str) -> list[tuple[str, dict[str, str]]]:
+    """Return serials and adb metadata for devices in the adb 'device' state."""
+    devices: list[tuple[str, dict[str, str]]] = []
     for line in output.splitlines()[1:]:
         parts = line.split()
         if len(parts) >= 2 and parts[1] == "device":
-            devices.append(parts[0])
+            devices.append((parts[0], parse_adb_metadata(parts[2:])))
     return devices
+
+
+def parse_adb_metadata(fields: list[str]) -> dict[str, str]:
+    """Parse key:value metadata emitted by 'adb devices -l'."""
+    metadata: dict[str, str] = {}
+    for field in fields:
+        key, separator, value = field.partition(":")
+        if separator:
+            metadata[key] = value
+    return metadata
+
+
+def is_known_device_name(value: str) -> bool:
+    """Return whether adb returned a usable human-readable device name."""
+    normalized = value.strip()
+    return bool(normalized and normalized.lower() not in {"null", "unknown"})
 
 
 if __name__ == "__main__":

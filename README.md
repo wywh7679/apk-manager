@@ -18,7 +18,7 @@ The executable will be created at `dist\APK Manager.exe`.
 
 1. Connect an Android device with USB debugging enabled, or start an emulator.
 2. Launch `APK Manager.exe`.
-3. Click **Refresh devices** and select a device.
+3. Click **Refresh devices** and select a device. Devices are shown with their Android device name or model when available, followed by the adb serial in parentheses.
 4. Click **Browse...** and select an `.apk` file.
 5. Click **Install APK**.
 
