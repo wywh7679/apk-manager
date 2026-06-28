@@ -32,5 +32,11 @@ The app can also populate a dropdown from a PHP JSON feed. When a user selects a
 2. Change `APK_MANAGER_TOKEN` in `server/apk-feed.php` to a private value.
 3. Copy `apk_manager_config.json.example` to `apk_manager_config.json` next to `APK Manager.exe`.
 4. Set `feed_url` to the deployed PHP URL and `auth_token` to the same token used by the PHP script.
+5. Optional: set `allow_self_signed_certificates` to `true` only for internal HTTPS servers that use self-signed certificates.
 
-The token is sent automatically by the app in request headers for both the JSON list and APK downloads, so users do not need to enter it in the GUI. Use HTTPS for the feed URL so the token and APK downloads are protected in transit.
+The token is sent automatically by the app in request headers for both the JSON list and APK downloads, so users do not need to enter it in the GUI. Use HTTPS for the feed URL so the token and APK downloads are protected in transit. Accepting self-signed certificates disables normal certificate verification for the feed and APK download requests, so only enable it for trusted internal servers.
+
+
+## Downgrade installs
+
+To install an APK over an existing newer version on the device, select **Allow version downgrade (-d)** before installing. This adds adb's `-d` flag to the install command.

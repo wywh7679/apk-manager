@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import queue
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -14,7 +15,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Callable, Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 ADB_COMMAND = "adb"
@@ -57,6 +58,7 @@ class ApkFeedConfig:
 
     feed_url: str = ""
     auth_token: str = ""
+    allow_self_signed_certificates: bool = False
 
     @property
     def enabled(self) -> bool:
@@ -74,6 +76,7 @@ class ApkManagerApp(tk.Tk):
 
         self.config = load_feed_config()
         self.apk_path = tk.StringVar()
+        self.force_downgrade = tk.BooleanVar(value=False)
         self.selected_remote_apk_label = tk.StringVar()
         self.selected_device_label = tk.StringVar()
         self.status_text = tk.StringVar(value="Ready")
@@ -164,6 +167,13 @@ class ApkManagerApp(tk.Tk):
             command=self.install_remote_apk,
         )
         self.install_remote_button.grid(row=0, column=2, sticky="e", padx=(6, 0))
+
+        self.force_downgrade_check = ttk.Checkbutton(
+            action_frame,
+            text="Allow version downgrade (-d)",
+            variable=self.force_downgrade,
+        )
+        self.force_downgrade_check.grid(row=1, column=1, columnspan=2, sticky="e", pady=(8, 0))
         if not self.config.enabled:
             self.install_remote_button.configure(state="disabled")
 
@@ -262,7 +272,11 @@ class ApkManagerApp(tk.Tk):
 
     def _refresh_remote_apks_worker(self) -> None:
         try:
-            payload = fetch_json(self.config.feed_url, self.config.auth_token)
+            payload = fetch_json(
+                self.config.feed_url,
+                self.config.auth_token,
+                self.config.allow_self_signed_certificates,
+            )
             apks = parse_remote_apks(payload, self.config.feed_url)
         except (OSError, ValueError, urllib.error.URLError) as error:
             self._queue_log(f"Unable to load remote APK feed: {error}\n")
@@ -321,7 +335,11 @@ class ApkManagerApp(tk.Tk):
     def _download_and_install_worker(self, device: AndroidDevice, remote_apk: RemoteApk) -> None:
         temp_path: Path | None = None
         try:
-            temp_path = download_apk(remote_apk, self.config.auth_token)
+            temp_path = download_apk(
+                remote_apk,
+                self.config.auth_token,
+                self.config.allow_self_signed_certificates,
+            )
             self._queue_log(f"Downloaded to {temp_path}\n")
             self.after(0, self.status_text.set, "Installing downloaded APK...")
             self._install_apk_worker(device, temp_path, cleanup=True)
@@ -340,7 +358,8 @@ class ApkManagerApp(tk.Tk):
         return next((apk for apk in self.remote_apks if apk.label == selected_label), None)
 
     def _install_apk_worker(self, device: AndroidDevice, apk: Path, cleanup: bool) -> None:
-        result = self._run_adb(["-s", device.serial, "install", "-r", str(apk)])
+        install_args = build_install_args(device.serial, apk, self.force_downgrade.get())
+        result = self._run_adb(install_args)
         self._queue_log(result.stdout)
         self._queue_log(result.stderr)
         if cleanup:
@@ -392,6 +411,7 @@ class ApkManagerApp(tk.Tk):
         state = "disabled" if busy else "normal"
         self.refresh_button.configure(state=state)
         self.install_local_button.configure(state=state)
+        self.force_downgrade_check.configure(state=state)
         if self.config.enabled:
             self.refresh_apks_button.configure(state=state)
             self.install_remote_button.configure(state=state)
@@ -433,15 +453,44 @@ def load_feed_config() -> ApkFeedConfig:
     return ApkFeedConfig(
         feed_url=str(data.get("feed_url", "")).strip(),
         auth_token=str(data.get("auth_token", "")).strip(),
+        allow_self_signed_certificates=parse_bool(
+            data.get("allow_self_signed_certificates", False)
+        ),
     )
 
 
-def fetch_json(url: str, auth_token: str) -> Any:
+def fetch_json(
+    url: str,
+    auth_token: str,
+    allow_self_signed_certificates: bool = False,
+) -> Any:
     """Fetch JSON from a URL, adding the transparent feed token when configured."""
     request = urllib.request.Request(url, headers=auth_headers(auth_token))
-    with urllib.request.urlopen(request, timeout=20) as response:
+    with urllib.request.urlopen(
+        request,
+        timeout=20,
+        context=ssl_context(allow_self_signed_certificates),
+    ) as response:
         charset = response.headers.get_content_charset() or "utf-8"
         return json.loads(response.read().decode(charset))
+
+
+def ssl_context(allow_self_signed_certificates: bool) -> ssl.SSLContext | None:
+    """Return an unverified SSL context only when explicitly configured."""
+    if not allow_self_signed_certificates:
+        return None
+    return ssl._create_unverified_context()
+
+
+def parse_bool(value: Any) -> bool:
+    """Parse booleans from JSON values without making arbitrary strings truthy."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(value, int):
+        return value != 0
+    return False
 
 
 def auth_headers(auth_token: str) -> dict[str, str]:
@@ -502,7 +551,11 @@ def parse_optional_str(value: Any) -> str | None:
     return parsed or None
 
 
-def download_apk(remote_apk: RemoteApk, auth_token: str) -> Path:
+def download_apk(
+    remote_apk: RemoteApk,
+    auth_token: str,
+    allow_self_signed_certificates: bool = False,
+) -> Path:
     """Download a remote APK to a temporary file and return its path."""
     safe_name = Path(remote_apk.name).name
     if not safe_name.lower().endswith(".apk"):
@@ -513,7 +566,11 @@ def download_apk(remote_apk: RemoteApk, auth_token: str) -> Path:
     try:
         with temp_file:
             request = urllib.request.Request(remote_apk.url, headers=auth_headers(auth_token))
-            with urllib.request.urlopen(request, timeout=120) as response:
+            with urllib.request.urlopen(
+                request,
+                timeout=120,
+                context=ssl_context(allow_self_signed_certificates),
+            ) as response:
                 while True:
                     chunk = response.read(DOWNLOAD_CHUNK_SIZE)
                     if not chunk:
@@ -533,6 +590,15 @@ def format_size(size: int) -> str:
             return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
         value /= 1024
     return f"{size} B"
+
+
+def build_install_args(serial: str, apk: Path, force_downgrade: bool) -> list[str]:
+    """Build adb install arguments, optionally allowing version downgrades."""
+    install_args = ["-s", serial, "install", "-r"]
+    if force_downgrade:
+        install_args.append("-d")
+    install_args.append(str(apk))
+    return install_args
 
 
 def parse_adb_devices(output: str) -> list[tuple[str, dict[str, str]]]:

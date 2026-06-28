@@ -1,11 +1,14 @@
 import unittest
+from pathlib import Path
 
 from src.apk_manager import (
     auth_headers,
+    build_install_args,
     format_size,
     is_known_device_name,
     parse_adb_devices,
     parse_adb_metadata,
+    parse_bool,
     parse_remote_apks,
 )
 
@@ -77,6 +80,26 @@ class RemoteApkFeedTest(unittest.TestCase):
             {"Authorization": "Bearer secret", "X-APK-Manager-Token": "secret"},
         )
         self.assertEqual(auth_headers(""), {})
+
+    def test_parse_bool_accepts_json_and_string_values(self):
+        self.assertTrue(parse_bool(True))
+        self.assertTrue(parse_bool("true"))
+        self.assertTrue(parse_bool("yes"))
+        self.assertTrue(parse_bool(1))
+        self.assertFalse(parse_bool(False))
+        self.assertFalse(parse_bool("false"))
+        self.assertFalse(parse_bool("no"))
+        self.assertFalse(parse_bool(None))
+
+    def test_build_install_args_optionally_forces_downgrade(self):
+        self.assertEqual(
+            build_install_args("device-1", Path("app.apk"), False),
+            ["-s", "device-1", "install", "-r", "app.apk"],
+        )
+        self.assertEqual(
+            build_install_args("device-1", Path("app.apk"), True),
+            ["-s", "device-1", "install", "-r", "-d", "app.apk"],
+        )
 
     def test_format_size(self):
         self.assertEqual(format_size(512), "512 B")

@@ -1,4 +1,5 @@
 {
   "feed_url": "https://example.com/apks/apk-feed.php",
-  "auth_token": "change-this-token-before-deploying"
+  "auth_token": "change-this-token-before-deploying",
+  "allow_self_signed_certificates": false
 }
