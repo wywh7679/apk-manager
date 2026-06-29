@@ -8,6 +8,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import time
 import threading
 import tkinter as tk
 import urllib.error
@@ -21,7 +22,52 @@ from urllib.parse import urlparse
 ADB_COMMAND = "adb"
 UNKNOWN_DEVICE_NAME = "Android device"
 CONFIG_FILE_NAME = "apk_manager_config.json"
+ONSITE_CONFIG_FILE_NAME = "onsite_config.json"
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+
+ONSITE_LEGACY_SETTINGS = [
+    ["settings", "put", "secure", "location_providers_allowed", "gps,wifi,network"],
+    ["settings", "--user", "0", "put", "global", "acc_shutdown_delay", "60"],
+    ["settings", "--user", "0", "put", "global", "acc_sleep_delay", "20"],
+    ["settings", "--user", "0", "put", "system", "screen_auto_brightness_adj", "1.0"],
+    ["settings", "--user", "0", "put", "system", "screen_brightness", "255"],
+    ["settings", "--user", "0", "put", "system", "screen_brightness_mode", "0"],
+    ["settings", "--user", "0", "put", "system", "screen_off_timeout", "0"],
+    ["settings", "--user", "0", "put", "system", "user_rotation", "1"],
+    ["settings", "--user", "0", "put", "system", "accelerometer_rotation", "0"],
+    ["settings", "put", "global", "auto_time", "1"],
+    ["settings", "put", "global", "auto_time_zone", "1"],
+]
+
+ONSITE_MODERN_SETTINGS = [
+    command
+    for command in ONSITE_LEGACY_SETTINGS
+    if "screen_auto_brightness_adj" not in command
+] + [["settings", "put", "secure", "doze_enabled", "0"]]
+
+ONSITE_APP_COMMANDS = [
+    ["pm", "disable-user", "--user", "0", "com.android.dialer"],
+    ["pm", "disable-user", "--user", "0", "org.codeaurora.snapcam"],
+    ["pm", "disable-user", "--user", "0", "org.codeaurora.gallery"],
+    ["pm", "disable-user", "--user", "0", "com.android.quicksearchbox"],
+    ["pm", "disable-user", "--user", "0", "com.android.vending"],
+    ["pm", "disable-user", "--user", "0", "com.android.mms"],
+    ["pm", "disable-user", "--user", "0", "com.android.calendar"],
+    ["pm", "disable-user", "--user", "0", "com.android.contacts"],
+    ["pm", "disable-user", "--user", "0", "com.android.deskclock"],
+    ["pm", "disable-user", "--user", "0", "com.android.music"],
+    ["pm", "disable-user", "--user", "0", "com.android.calculator2"],
+    ["pm", "disable-user", "--user", "0", "com.android.documentsui"],
+    ["pm", "disable-user", "--user", "0", "com.android.browser"],
+    ["pm", "disable-user", "--user", "0", "com.android.soundrecorder"],
+    ["pm", "disable-user", "--user", "0", "com.qualcomm.wfd.client"],
+    ["pm", "disable-user", "--user", "0", "com.android.email"],
+    ["pm", "enable", "com.android.dialer"],
+    ["pm", "enable", "com.android.mms"],
+    ["pm", "enable", "com.android.phone"],
+    ["pm", "enable", "com.android.email"],
+    ["pm", "enable", "com.android.browser"],
+]
 
 
 @dataclass(frozen=True)
@@ -53,6 +99,15 @@ class RemoteApk:
 
 
 @dataclass(frozen=True)
+class OnsiteConfig:
+    """Configuration for the OnSite installer workflow."""
+
+    onsite_apk: str = "com.ses.onsite-debug-1.0.130.apk"
+    launcher_apk: str = "Launcher3.apk"
+    install_logs_dir: str = "install_logs"
+
+
+@dataclass(frozen=True)
 class ApkFeedConfig:
     """Configuration used to request the remote APK feed."""
 
@@ -75,10 +130,13 @@ class ApkManagerApp(tk.Tk):
         self.minsize(720, 560)
 
         self.config = load_feed_config()
+        self.onsite_config = load_onsite_config()
         self.apk_path = tk.StringVar()
         self.force_downgrade = tk.BooleanVar(value=False)
         self.selected_remote_apk_label = tk.StringVar()
         self.selected_device_label = tk.StringVar()
+        self.selected_onsite_device_label = tk.StringVar()
+        self.onsite_serial = tk.StringVar()
         self.status_text = tk.StringVar(value="Ready")
         self.devices: list[AndroidDevice] = []
         self.remote_apks: list[RemoteApk] = []
@@ -96,11 +154,26 @@ class ApkManagerApp(tk.Tk):
 
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(4, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        self.notebook = ttk.Notebook(self)
+        self.notebook.grid(row=0, column=0, sticky="nsew")
+
+        self.apk_installer_tab = ttk.Frame(self.notebook)
+        self.onsite_installer_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.apk_installer_tab, text="APK Installer")
+        self.notebook.add(self.onsite_installer_tab, text="OnSite Installer")
+
+        self._build_apk_installer_tab(self.apk_installer_tab)
+        self._build_onsite_installer_tab(self.onsite_installer_tab)
+
+    def _build_apk_installer_tab(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(4, weight=1)
 
         padding = {"padx": 12, "pady": 8}
 
-        device_frame = ttk.LabelFrame(self, text="Android device")
+        device_frame = ttk.LabelFrame(parent, text="Android device")
         device_frame.grid(row=0, column=0, sticky="ew", **padding)
         device_frame.columnconfigure(0, weight=1)
 
@@ -119,7 +192,7 @@ class ApkManagerApp(tk.Tk):
         )
         self.refresh_button.grid(row=0, column=1, padx=(6, 10), pady=10)
 
-        local_apk_frame = ttk.LabelFrame(self, text="Local APK file")
+        local_apk_frame = ttk.LabelFrame(parent, text="Local APK file")
         local_apk_frame.grid(row=1, column=0, sticky="ew", **padding)
         local_apk_frame.columnconfigure(0, weight=1)
 
@@ -129,7 +202,7 @@ class ApkManagerApp(tk.Tk):
         browse_button = ttk.Button(local_apk_frame, text="Browse...", command=self.browse_apk)
         browse_button.grid(row=0, column=1, padx=(6, 10), pady=10)
 
-        remote_apk_frame = ttk.LabelFrame(self, text="Remote APK feed")
+        remote_apk_frame = ttk.LabelFrame(parent, text="Remote APK feed")
         remote_apk_frame.grid(row=2, column=0, sticky="ew", **padding)
         remote_apk_frame.columnconfigure(0, weight=1)
 
@@ -150,7 +223,7 @@ class ApkManagerApp(tk.Tk):
         if not self.config.enabled:
             self.refresh_apks_button.configure(state="disabled")
 
-        action_frame = ttk.Frame(self)
+        action_frame = ttk.Frame(parent)
         action_frame.grid(row=3, column=0, sticky="ew", **padding)
         action_frame.columnconfigure(0, weight=1)
 
@@ -177,7 +250,7 @@ class ApkManagerApp(tk.Tk):
         if not self.config.enabled:
             self.install_remote_button.configure(state="disabled")
 
-        log_frame = ttk.LabelFrame(self, text="Log")
+        log_frame = ttk.LabelFrame(parent, text="Log")
         log_frame.grid(row=4, column=0, sticky="nsew", **padding)
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
@@ -189,8 +262,63 @@ class ApkManagerApp(tk.Tk):
         scrollbar.grid(row=0, column=1, sticky="ns", padx=(0, 10), pady=10)
         self.log_text.configure(yscrollcommand=scrollbar.set)
 
-        status_bar = ttk.Label(self, textvariable=self.status_text, anchor="w")
+        status_bar = ttk.Label(parent, textvariable=self.status_text, anchor="w")
         status_bar.grid(row=5, column=0, sticky="ew", padx=12, pady=(0, 8))
+
+    def _build_onsite_installer_tab(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(0, weight=1)
+        parent.rowconfigure(2, weight=1)
+        padding = {"padx": 12, "pady": 8}
+
+        setup_frame = ttk.LabelFrame(parent, text="OnSite install setup")
+        setup_frame.grid(row=0, column=0, sticky="ew", **padding)
+        setup_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(setup_frame, text="Android device").grid(row=0, column=0, sticky="w", padx=(10, 6), pady=8)
+        self.onsite_device_combo = ttk.Combobox(
+            setup_frame,
+            textvariable=self.selected_onsite_device_label,
+            state="readonly",
+            values=[],
+        )
+        self.onsite_device_combo.grid(row=0, column=1, sticky="ew", padx=(6, 6), pady=8)
+        self.refresh_onsite_devices_button = ttk.Button(
+            setup_frame,
+            text="Refresh devices",
+            command=self.refresh_devices,
+        )
+        self.refresh_onsite_devices_button.grid(row=0, column=2, padx=(6, 10), pady=8)
+
+        ttk.Label(setup_frame, text="Serial #").grid(row=1, column=0, sticky="w", padx=(10, 6), pady=8)
+        self.onsite_serial_entry = ttk.Entry(setup_frame, textvariable=self.onsite_serial)
+        self.onsite_serial_entry.grid(row=1, column=1, sticky="ew", padx=(6, 10), pady=8)
+
+        onsite_apk = resolve_config_path(self.onsite_config.onsite_apk)
+        launcher_apk = resolve_config_path(self.onsite_config.launcher_apk)
+        config_text = f"OnSite APK: {onsite_apk}\nLauncher APK: {launcher_apk}\nLogs: {resolve_config_path(self.onsite_config.install_logs_dir)}"
+        ttk.Label(setup_frame, text=config_text, justify="left").grid(
+            row=2, column=0, columnspan=2, sticky="w", padx=10, pady=8
+        )
+
+        action_frame = ttk.Frame(parent)
+        action_frame.grid(row=1, column=0, sticky="ew", **padding)
+        action_frame.columnconfigure(0, weight=1)
+        self.run_onsite_button = ttk.Button(
+            action_frame,
+            text="Run OnSite Install",
+            command=self.run_onsite_install,
+        )
+        self.run_onsite_button.grid(row=0, column=1, sticky="e")
+
+        log_frame = ttk.LabelFrame(parent, text="OnSite log")
+        log_frame.grid(row=2, column=0, sticky="nsew", **padding)
+        log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
+        self.onsite_log_text = tk.Text(log_frame, wrap="word", state="disabled", height=12)
+        self.onsite_log_text.grid(row=0, column=0, sticky="nsew", padx=(10, 0), pady=10)
+        onsite_scrollbar = ttk.Scrollbar(log_frame, command=self.onsite_log_text.yview)
+        onsite_scrollbar.grid(row=0, column=1, sticky="ns", padx=(0, 10), pady=10)
+        self.onsite_log_text.configure(yscrollcommand=onsite_scrollbar.set)
 
     def browse_apk(self) -> None:
         path = filedialog.askopenfilename(
@@ -247,15 +375,22 @@ class ApkManagerApp(tk.Tk):
         self.devices = devices
         labels = [device.label for device in self.devices]
         self.device_combo.configure(values=labels)
+        self.onsite_device_combo.configure(values=labels)
+        previously_selected_onsite = self.selected_onsite_device_label.get()
         if devices:
             if previously_selected in labels:
                 self.selected_device_label.set(previously_selected)
             else:
                 self.selected_device_label.set(labels[0])
+            if previously_selected_onsite in labels:
+                self.selected_onsite_device_label.set(previously_selected_onsite)
+            else:
+                self.selected_onsite_device_label.set(labels[0])
             self.status_text.set(f"Found {len(devices)} device(s)")
             self._queue_log(f"Found devices: {', '.join(labels)}\n")
         else:
             self.selected_device_label.set("")
+            self.selected_onsite_device_label.set("")
             self.status_text.set("No authorized devices found")
             self._queue_log("No authorized devices found. Check USB debugging authorization.\n")
         self._set_busy(False)
@@ -349,6 +484,179 @@ class ApkManagerApp(tk.Tk):
                 temp_path.unlink(missing_ok=True)
             self.after(0, self._install_finished, False, "APK download failed")
 
+
+    def run_onsite_install(self) -> None:
+        device = self._selected_onsite_device()
+        serial_number = self.onsite_serial.get().strip()
+        onsite_apk = resolve_config_path(self.onsite_config.onsite_apk)
+
+        if not device:
+            messagebox.showerror("No device selected", "Select an Android device first.")
+            return
+        if not serial_number:
+            messagebox.showerror("Missing serial #", "Enter the OnSite serial number first.")
+            return
+        if not onsite_apk.is_file() or onsite_apk.suffix.lower() != ".apk":
+            messagebox.showerror(
+                "Missing OnSite APK",
+                f"Update {ONSITE_CONFIG_FILE_NAME}; APK not found: {onsite_apk}",
+            )
+            return
+
+        self._set_onsite_busy(True, "Running OnSite install...")
+        self._queue_onsite_log(f"Version to be installed: {onsite_apk.name}\n")
+        self._run_background(lambda: self._onsite_install_worker(device, serial_number))
+
+    def _selected_onsite_device(self) -> AndroidDevice | None:
+        selected_label = self.selected_onsite_device_label.get()
+        return next((device for device in self.devices if device.label == selected_label), None)
+
+    def _onsite_install_worker(self, device: AndroidDevice, serial_number: str) -> None:
+        onsite_apk = resolve_config_path(self.onsite_config.onsite_apk)
+        launcher_apk = resolve_config_path(self.onsite_config.launcher_apk)
+        logs_dir = resolve_config_path(self.onsite_config.install_logs_dir)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        android_version = self._onsite_adb_text(device, ["shell", "getprop", "ro.build.version.release"]).strip()
+        if not android_version:
+            self._queue_onsite_log(
+                "Make sure the tablet is connected via USB to this computer and has USB debugging enabled then try again.\n"
+            )
+            self.after(0, self._onsite_install_finished, False, "Unable to read Android version")
+            return
+
+        write_text_file(logs_dir / f"{safe_log_name(serial_number)}.os.txt", android_version)
+        self._queue_onsite_log(f"Android {android_version}\n")
+
+        if android_version == "6.0.1":
+            self._run_onsite_android_601(device, serial_number, onsite_apk, logs_dir)
+        else:
+            self._run_onsite_modern_android(device, serial_number, onsite_apk, launcher_apk, logs_dir)
+
+        self._queue_onsite_log("Install finished.\n")
+        self.after(0, self._onsite_install_finished, True, "OnSite install finished")
+
+    def _run_onsite_android_601(
+        self,
+        device: AndroidDevice,
+        serial_number: str,
+        onsite_apk: Path,
+        logs_dir: Path,
+    ) -> None:
+        self._queue_onsite_log("Installing Onsite FMS+\n")
+        self._onsite_adb(device, ["shell", "pm", "uninstall", "com.ses.onsite"])
+        self._onsite_adb(device, ["install", "-d", "-g", str(onsite_apk)])
+        self._launch_onsite(device, serial_number)
+        time.sleep(5)
+        self._pull_onsite_logs(device, serial_number, logs_dir)
+        self._apply_settings(device, legacy=True)
+
+    def _run_onsite_modern_android(
+        self,
+        device: AndroidDevice,
+        serial_number: str,
+        onsite_apk: Path,
+        launcher_apk: Path,
+        logs_dir: Path,
+    ) -> None:
+        self._apply_settings(device, legacy=False)
+        if launcher_apk.is_file():
+            self._queue_onsite_log("Installing launcher3\n")
+            self._onsite_adb(device, ["install", "-r", str(launcher_apk)])
+        else:
+            self._queue_onsite_log(f"Launcher APK not found, skipping: {launcher_apk}\n")
+
+        self._queue_onsite_log("Disabling shortcuts and apps\n")
+        for command in ONSITE_APP_COMMANDS:
+            self._onsite_shell(device, command)
+
+        self._queue_onsite_log("Checking for a prior version of Onsite FMS\n")
+        packages = self._onsite_adb_text(device, ["shell", "pm", "list", "packages", "com.ses.onsite"])
+        if "package:com.ses.onsite" in packages:
+            self._queue_onsite_log("Removing prior version of Onsite FMS\n")
+            self._onsite_adb(device, ["shell", "pm", "uninstall", "com.ses.onsite"])
+
+        self._queue_onsite_log("Installing Onsite FMS+\n")
+        self._onsite_adb(device, ["install", "-d", "-g", str(onsite_apk)])
+        self._launch_onsite(device, serial_number)
+        time.sleep(5)
+        self._pull_onsite_logs(device, serial_number, logs_dir)
+
+    def _apply_settings(self, device: AndroidDevice, legacy: bool) -> None:
+        self._queue_onsite_log("Applying system settings (display, acc, date/time)\n")
+        commands = ONSITE_LEGACY_SETTINGS if legacy else ONSITE_MODERN_SETTINGS
+        for command in commands:
+            self._onsite_shell(device, command)
+
+    def _launch_onsite(self, device: AndroidDevice, serial_number: str) -> None:
+        self._queue_onsite_log("Launching Onsite FMS+ to set software key\n")
+        self._onsite_adb(
+            device,
+            [
+                "shell",
+                "am",
+                "start",
+                "-S",
+                "-n",
+                "com.ses.onsite/com.ses.onsite.ui.MainActivity",
+                "--es",
+                "com.ses.onsite.args",
+                "initialize",
+                "--es",
+                "com.ses.onsite.args2",
+                serial_number,
+            ],
+        )
+
+    def _pull_onsite_logs(self, device: AndroidDevice, serial_number: str, logs_dir: Path) -> None:
+        self._queue_onsite_log("Retrieving machine id, serial and software key\n")
+        safe_serial = safe_log_name(serial_number)
+        self._onsite_adb(device, ["pull", "/storage/self/primary/kf.osu", str(logs_dir / f"{safe_serial}.kf.txt")])
+        self._onsite_adb(device, ["pull", "/storage/self/primary/id.osu", str(logs_dir / f"{safe_serial}.id.txt")])
+
+    def _onsite_shell(self, device: AndroidDevice, command: list[str]) -> None:
+        self._onsite_adb(device, ["shell", *command])
+
+    def _onsite_adb_text(self, device: AndroidDevice, args: list[str]) -> str:
+        result = self._onsite_adb(device, args)
+        return (result.stdout or result.stderr or "").strip()
+
+    def _onsite_adb(self, device: AndroidDevice, args: list[str]) -> subprocess.CompletedProcess[str]:
+        result = self._run_adb(["-s", device.serial, *args])
+        self._queue_onsite_log(result.stdout)
+        self._queue_onsite_log(result.stderr)
+        return result
+
+    def _onsite_install_finished(self, success: bool, status: str) -> None:
+        self.status_text.set(status)
+        self._set_onsite_busy(False)
+        if success:
+            messagebox.showinfo("OnSite install complete", status)
+        else:
+            messagebox.showerror("OnSite install failed", "See the OnSite log panel for details.")
+
+    def _set_onsite_busy(self, busy: bool, status: str | None = None) -> None:
+        state = "disabled" if busy else "normal"
+        self.run_onsite_button.configure(state=state)
+        self.refresh_onsite_devices_button.configure(state=state)
+        self.onsite_serial_entry.configure(state=state)
+        self.onsite_device_combo.configure(state=state if busy else "readonly")
+        if status:
+            self.status_text.set(status)
+
+    def _queue_onsite_log(self, text: str) -> None:
+        if not text:
+            return
+        self.after(0, self._append_onsite_log, text)
+
+    def _append_onsite_log(self, text: str) -> None:
+        self.onsite_log_text.configure(state="normal")
+        self.onsite_log_text.insert("end", text)
+        if not text.endswith("\n"):
+            self.onsite_log_text.insert("end", "\n")
+        self.onsite_log_text.see("end")
+        self.onsite_log_text.configure(state="disabled")
+
     def _selected_device(self) -> AndroidDevice | None:
         selected_label = self.selected_device_label.get()
         return next((device for device in self.devices if device.label == selected_label), None)
@@ -412,6 +720,7 @@ class ApkManagerApp(tk.Tk):
         self.refresh_button.configure(state=state)
         self.install_local_button.configure(state=state)
         self.force_downgrade_check.configure(state=state)
+        self.refresh_onsite_devices_button.configure(state=state)
         if self.config.enabled:
             self.refresh_apks_button.configure(state=state)
             self.install_remote_button.configure(state=state)
@@ -457,6 +766,40 @@ def load_feed_config() -> ApkFeedConfig:
             data.get("allow_self_signed_certificates", False)
         ),
     )
+
+
+def load_onsite_config() -> OnsiteConfig:
+    """Load OnSite installer settings from JSON next to the executable."""
+    config_path = app_base_dir() / ONSITE_CONFIG_FILE_NAME
+    if not config_path.is_file():
+        return OnsiteConfig()
+
+    with config_path.open("r", encoding="utf-8") as config_file:
+        data = json.load(config_file)
+    return OnsiteConfig(
+        onsite_apk=str(data.get("onsite_apk", OnsiteConfig.onsite_apk)).strip(),
+        launcher_apk=str(data.get("launcher_apk", OnsiteConfig.launcher_apk)).strip(),
+        install_logs_dir=str(data.get("install_logs_dir", OnsiteConfig.install_logs_dir)).strip(),
+    )
+
+
+def resolve_config_path(value: str) -> Path:
+    """Resolve config paths relative to the executable directory."""
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    return app_base_dir() / path
+
+
+def safe_log_name(value: str) -> str:
+    """Return a filesystem-safe log filename stem."""
+    return "".join(character if character.isalnum() or character in "._-" else "_" for character in value).strip("._") or "unknown"
+
+
+def write_text_file(path: Path, value: str) -> None:
+    """Write text to a file, creating its parent directory first."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(value, encoding="utf-8")
 
 
 def fetch_json(

@@ -4,6 +4,7 @@ from pathlib import Path
 from src.apk_manager import (
     auth_headers,
     build_install_args,
+    safe_log_name,
     format_size,
     is_known_device_name,
     parse_adb_devices,
@@ -100,6 +101,10 @@ class RemoteApkFeedTest(unittest.TestCase):
             build_install_args("device-1", Path("app.apk"), True),
             ["-s", "device-1", "install", "-r", "-d", "app.apk"],
         )
+
+    def test_safe_log_name_replaces_filename_unsafe_characters(self):
+        self.assertEqual(safe_log_name("ABC/123:XYZ"), "ABC_123_XYZ")
+        self.assertEqual(safe_log_name("..."), "unknown")
 
     def test_format_size(self):
         self.assertEqual(format_size(512), "512 B")

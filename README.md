@@ -20,7 +20,7 @@ The executable will be created at `dist\APK Manager.exe`.
 2. Launch `APK Manager.exe`.
 3. Click **Refresh devices** and select a device. Devices are shown with their Android device name or model when available, followed by the adb serial in parentheses.
 4. Click **Browse...** and select an `.apk` file.
-5. Click **Install APK**.
+5. Click **Install local APK**.
 
 The app shows install progress and the `adb install` output in the log panel.
 
@@ -40,3 +40,14 @@ The token is sent automatically by the app in request headers for both the JSON 
 ## Downgrade installs
 
 To install an APK over an existing newer version on the device, select **Allow version downgrade (-d)** before installing. This adds adb's `-d` flag to the install command.
+
+
+## OnSite Installer
+
+The second tab, **OnSite Installer**, mirrors the legacy PowerShell install workflow. Copy `onsite_config.json.example` to `onsite_config.json` next to `APK Manager.exe`, then set:
+
+- `onsite_apk`: the OnSite FMS+ APK to install.
+- `launcher_apk`: the optional Launcher3 APK used by the non-Android 6.0.1 workflow.
+- `install_logs_dir`: where OS, machine-id, and key files are written after install.
+
+Select the Android device, enter the serial number, and click **Run OnSite Install**. The workflow records the Android OS version, applies the display/ACC/date-time settings from the PowerShell script, installs and initializes OnSite FMS+, pulls `kf.osu` and `id.osu`, and writes logs under the configured log directory.
