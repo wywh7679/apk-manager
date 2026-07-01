@@ -14,6 +14,10 @@ build_windows.bat
 
 The executable will be created at `dist\APK Manager.exe`.
 
+### Build troubleshooting
+
+If the build fails with `PermissionError: [WinError 5] Access is denied` for `dist\APK Manager.exe`, Windows still has the previous executable locked. Close APK Manager if it is running, close any File Explorer preview/details panes showing the executable, and rerun `build_windows.bat`. The build script now checks for this locked-file condition before invoking PyInstaller and prints that guidance.
+
 ## Use the app
 
 1. Connect an Android device with USB debugging enabled, or start an emulator.
