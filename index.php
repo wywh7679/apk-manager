@@ -39,6 +39,19 @@ include __DIR__ . '/includes/header.php';
                 <div class="card-order">#<?= (int)($item['sort_order'] ?? 0) ?></div>
                 <h2><a href="<?= h($item['link']) ?>" target="_blank" rel="noopener noreferrer"><?= h($item['title']) ?></a></h2>
                 <p><?= nl2br(h($item['description'] ?? '')) ?></p>
+                <?php if (!empty($item['credentials'])): ?>
+                    <div class="credentials">
+                        <h3>Credentials</h3>
+                        <?php foreach ($item['credentials'] as $credential): ?>
+                            <dl>
+                                <dt>Username</dt>
+                                <dd><code><?= h($credential['username'] ?? '') ?></code></dd>
+                                <dt>Password</dt>
+                                <dd><code><?= h($credential['password'] ?? '') ?></code></dd>
+                            </dl>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
                 <div class="tags">
                     <?php foreach (($item['categories'] ?? []) as $categoryId): ?>
                         <?php if (isset($categoryMap[$categoryId])): ?>

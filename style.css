@@ -85,3 +85,44 @@ th, td { border-bottom: 1px solid var(--border); padding: .75rem; text-align: le
     .container { padding: 1rem; }
     .grid-form { grid-template-columns: 1fr; }
 }
+.credential-list {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+}
+.credential-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+.credentials {
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: .75rem 0;
+    margin: 1rem 0;
+}
+.credentials h3 {
+    font-size: .95rem;
+    margin: 0 0 .5rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+.credentials dl {
+    display: grid;
+    grid-template-columns: minmax(80px, auto) 1fr;
+    gap: .25rem .75rem;
+    margin: .5rem 0;
+}
+.credentials dt {
+    color: var(--muted);
+    font-weight: 700;
+}
+.credentials dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+@media (max-width: 760px) {
+    .credential-row { grid-template-columns: 1fr; }
+}

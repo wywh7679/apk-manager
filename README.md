@@ -6,7 +6,7 @@ A small PHP 7.4 application for maintaining a JSON-backed directory of links.
 
 - Public directory view with category filtering.
 - Authenticated management pages for items and categories.
-- Item fields for title, description, URL, category assignments, and display order.
+- Item fields for title, description, URL, category assignments, display order, and multiple username/password credential pairs.
 - JSON storage under `data/`.
 - CSRF protection on management forms.
 

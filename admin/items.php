@@ -17,6 +17,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $description = trim($_POST['description'] ?? '');
         $link = trim($_POST['link'] ?? '');
         $sortOrder = (int)($_POST['sort_order'] ?? 0);
+        $usernames = $_POST['credential_usernames'] ?? [];
+        $passwords = $_POST['credential_passwords'] ?? [];
+        $credentials = [];
+        $credentialCount = max(count($usernames), count($passwords));
+        for ($i = 0; $i < $credentialCount; $i++) {
+            $credentialUsername = trim($usernames[$i] ?? '');
+            $credentialPassword = trim($passwords[$i] ?? '');
+            if ($credentialUsername === '' && $credentialPassword === '') {
+                continue;
+            }
+            $credentials[] = [
+                'username' => $credentialUsername,
+                'password' => $credentialPassword,
+            ];
+        }
         $selectedCategories = array_values(array_intersect($_POST['categories'] ?? [], array_column(categories_all(), 'id')));
 
         if ($title === '' || $link === '' || filter_var($link, FILTER_VALIDATE_URL) === false) {
@@ -30,6 +45,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'description' => $description,
             'link' => $link,
             'categories' => $selectedCategories,
+            'credentials' => $credentials,
             'sort_order' => $sortOrder,
         ];
 
@@ -57,6 +73,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     redirect('/admin/items.php');
 }
+$credentialRows = $editing['credentials'] ?? [];
+$minimumCredentialRows = max(3, count($credentialRows) + 2);
+while (count($credentialRows) < $minimumCredentialRows) {
+    $credentialRows[] = ['username' => '', 'password' => ''];
+}
 include __DIR__ . '/../includes/header.php';
 ?>
 <h1>Manage Items</h1>
@@ -70,6 +91,16 @@ include __DIR__ . '/../includes/header.php';
         <label>Link <input type="url" name="link" value="<?= h($editing['link'] ?? '') ?>" required placeholder="https://example.com"></label>
         <label>Order <input type="number" name="sort_order" value="<?= h((string)($editing['sort_order'] ?? 0)) ?>"></label>
         <label class="full">Description <textarea name="description" rows="4"><?= h($editing['description'] ?? '') ?></textarea></label>
+        <fieldset class="full credential-list">
+            <legend>Usernames and Passwords</legend>
+            <p class="help">Add as many credential pairs as this item needs. Leave a row blank to ignore it.</p>
+            <?php foreach ($credentialRows as $credential): ?>
+                <div class="credential-row">
+                    <label>Username <input type="text" name="credential_usernames[]" value="<?= h($credential['username'] ?? '') ?>"></label>
+                    <label>Password <input type="text" name="credential_passwords[]" value="<?= h($credential['password'] ?? '') ?>"></label>
+                </div>
+            <?php endforeach; ?>
+        </fieldset>
         <fieldset class="full checkbox-list">
             <legend>Categories</legend>
             <?php foreach ($categories as $category): ?>
