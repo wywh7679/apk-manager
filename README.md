@@ -26,7 +26,7 @@ If the build fails with `PermissionError: [WinError 5] Access is denied` for `di
 4. Click **Browse...** and select an `.apk` file.
 5. Click **Install local APK**.
 
-The app shows install progress and the `adb install` output in the log panel.
+The app shows install progress and the `adb install` output in the log panel. On Windows, ADB command windows are hidden in the background so they do not pop up over the application.
 
 ## Remote APK feed
 

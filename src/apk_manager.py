@@ -697,6 +697,7 @@ class ApkManagerApp(tk.Tk):
                 check=False,
                 text=True,
                 timeout=timeout,
+                **hidden_subprocess_kwargs(),
             )
         except FileNotFoundError as error:
             return subprocess.CompletedProcess(
@@ -742,6 +743,20 @@ class ApkManagerApp(tk.Tk):
             self.log_text.see("end")
             self.log_text.configure(state="disabled")
         self.after(100, self._drain_log_queue)
+
+
+def hidden_subprocess_kwargs() -> dict[str, object]:
+    """Return subprocess options that keep adb console windows hidden on Windows."""
+    if sys.platform != "win32":
+        return {}
+
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = subprocess.SW_HIDE
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    }
 
 
 def app_base_dir() -> Path:

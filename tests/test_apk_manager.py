@@ -6,6 +6,7 @@ from src.apk_manager import (
     build_install_args,
     safe_log_name,
     format_size,
+    hidden_subprocess_kwargs,
     is_known_device_name,
     parse_adb_devices,
     parse_adb_metadata,
@@ -105,6 +106,10 @@ class RemoteApkFeedTest(unittest.TestCase):
     def test_safe_log_name_replaces_filename_unsafe_characters(self):
         self.assertEqual(safe_log_name("ABC/123:XYZ"), "ABC_123_XYZ")
         self.assertEqual(safe_log_name("..."), "unknown")
+
+    def test_hidden_subprocess_kwargs_is_safe_on_current_platform(self):
+        kwargs = hidden_subprocess_kwargs()
+        self.assertIsInstance(kwargs, dict)
 
     def test_format_size(self):
         self.assertEqual(format_size(512), "512 B")
