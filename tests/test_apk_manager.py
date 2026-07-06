@@ -1,17 +1,21 @@
+import csv
+import tempfile
 import unittest
 from pathlib import Path
 
 from src.apk_manager import (
     auth_headers,
     build_install_args,
-    safe_log_name,
+    collect_onsite_install_rows,
     format_size,
+    safe_log_name,
     hidden_subprocess_kwargs,
     is_known_device_name,
     parse_adb_devices,
     parse_adb_metadata,
     parse_bool,
     parse_remote_apks,
+    write_onsite_spreadsheet,
 )
 
 
@@ -110,6 +114,41 @@ class RemoteApkFeedTest(unittest.TestCase):
     def test_hidden_subprocess_kwargs_is_safe_on_current_platform(self):
         kwargs = hidden_subprocess_kwargs()
         self.assertIsInstance(kwargs, dict)
+
+    def test_collect_and_write_onsite_spreadsheet(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            logs_dir = Path(temp_dir)
+            (logs_dir / "ABC123.os.txt").write_text("Android 11", encoding="utf-8")
+            (logs_dir / "ABC123.kf.txt").write_text("software-key", encoding="utf-8")
+            (logs_dir / "ABC123.id.txt").write_text("machine-id", encoding="utf-8")
+            (logs_dir / "XYZ999.os.txt").write_text("Android 6.0.1", encoding="utf-8")
+
+            rows = collect_onsite_install_rows(logs_dir)
+
+            self.assertEqual(
+                rows,
+                [
+                    {
+                        "serial_number": "ABC123",
+                        "android_version": "Android 11",
+                        "kf_osu": "software-key",
+                        "id_osu": "machine-id",
+                    },
+                    {
+                        "serial_number": "XYZ999",
+                        "android_version": "Android 6.0.1",
+                        "kf_osu": "",
+                        "id_osu": "",
+                    },
+                ],
+            )
+
+            spreadsheet_path = logs_dir / "onsite_installs.csv"
+            written_rows = write_onsite_spreadsheet(logs_dir, spreadsheet_path)
+
+            self.assertEqual(written_rows, rows)
+            with spreadsheet_path.open("r", encoding="utf-8-sig", newline="") as csv_file:
+                self.assertEqual(list(csv.DictReader(csv_file)), rows)
 
     def test_format_size(self):
         self.assertEqual(format_size(512), "512 B")

@@ -54,4 +54,4 @@ The second tab, **OnSite Installer**, mirrors the legacy PowerShell install work
 - `launcher_apk`: the optional Launcher3 APK used by the non-Android 6.0.1 workflow.
 - `install_logs_dir`: where OS, machine-id, and key files are written after install.
 
-Select the Android device, enter the serial number, and click **Run OnSite Install**. The workflow records the Android OS version, applies the display/ACC/date-time settings from the PowerShell script, installs and initializes OnSite FMS+, pulls `kf.osu` and `id.osu`, and writes logs under the configured log directory.
+Select the Android device, enter the serial number, and click **Run OnSite Install**. The workflow records the Android OS version, applies the display/ACC/date-time settings from the PowerShell script, installs and initializes OnSite FMS+, pulls `kf.osu` and `id.osu`, and writes logs under the configured log directory. Click **Generate install spreadsheet** to create `onsite_installs.csv` from every `.os.txt`, `.kf.txt`, and `.id.txt` file in that log directory.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import queue
 import ssl
@@ -308,7 +309,13 @@ class ApkManagerApp(tk.Tk):
             text="Run OnSite Install",
             command=self.run_onsite_install,
         )
-        self.run_onsite_button.grid(row=0, column=1, sticky="e")
+        self.run_onsite_button.grid(row=0, column=1, sticky="e", padx=(6, 0))
+        self.generate_onsite_spreadsheet_button = ttk.Button(
+            action_frame,
+            text="Generate install spreadsheet",
+            command=self.generate_onsite_spreadsheet,
+        )
+        self.generate_onsite_spreadsheet_button.grid(row=0, column=2, sticky="e", padx=(6, 0))
 
         log_frame = ttk.LabelFrame(parent, text="OnSite log")
         log_frame.grid(row=2, column=0, sticky="nsew", **padding)
@@ -484,6 +491,24 @@ class ApkManagerApp(tk.Tk):
                 temp_path.unlink(missing_ok=True)
             self.after(0, self._install_finished, False, "APK download failed")
 
+    def generate_onsite_spreadsheet(self) -> None:
+        logs_dir = resolve_config_path(self.onsite_config.install_logs_dir)
+        if not logs_dir.is_dir():
+            messagebox.showerror(
+                "Missing install logs",
+                f"Install logs folder does not exist: {logs_dir}",
+            )
+            return
+
+        spreadsheet_path = logs_dir / "onsite_installs.csv"
+        rows = write_onsite_spreadsheet(logs_dir, spreadsheet_path)
+        self._queue_onsite_log(
+            f"Generated spreadsheet with {len(rows)} install(s): {spreadsheet_path}\n"
+        )
+        messagebox.showinfo(
+            "Spreadsheet generated",
+            f"Generated {spreadsheet_path} with {len(rows)} install(s).",
+        )
 
     def run_onsite_install(self) -> None:
         device = self._selected_onsite_device()
@@ -638,6 +663,7 @@ class ApkManagerApp(tk.Tk):
     def _set_onsite_busy(self, busy: bool, status: str | None = None) -> None:
         state = "disabled" if busy else "normal"
         self.run_onsite_button.configure(state=state)
+        self.generate_onsite_spreadsheet_button.configure(state=state)
         self.refresh_onsite_devices_button.configure(state=state)
         self.onsite_serial_entry.configure(state=state)
         self.onsite_device_combo.configure(state=state if busy else "readonly")
@@ -815,6 +841,49 @@ def write_text_file(path: Path, value: str) -> None:
     """Write text to a file, creating its parent directory first."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(value, encoding="utf-8")
+
+
+def write_onsite_spreadsheet(logs_dir: Path, spreadsheet_path: Path) -> list[dict[str, str]]:
+    """Write a CSV spreadsheet summarizing all OnSite install log triplets."""
+    rows = collect_onsite_install_rows(logs_dir)
+    spreadsheet_path.parent.mkdir(parents=True, exist_ok=True)
+    with spreadsheet_path.open("w", newline="", encoding="utf-8-sig") as spreadsheet_file:
+        writer = csv.DictWriter(
+            spreadsheet_file,
+            fieldnames=["serial_number", "android_version", "kf_osu", "id_osu"],
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+    return rows
+
+
+def collect_onsite_install_rows(logs_dir: Path) -> list[dict[str, str]]:
+    """Collect install rows from .os.txt, .kf.txt, and .id.txt files in a log folder."""
+    serials = {
+        path.name.rsplit(".", 2)[0]
+        for path in logs_dir.glob("*.os.txt")
+    }
+    serials.update(path.name.rsplit(".", 2)[0] for path in logs_dir.glob("*.kf.txt"))
+    serials.update(path.name.rsplit(".", 2)[0] for path in logs_dir.glob("*.id.txt"))
+
+    rows: list[dict[str, str]] = []
+    for serial in sorted(serials, key=str.casefold):
+        rows.append(
+            {
+                "serial_number": serial,
+                "android_version": read_log_value(logs_dir / f"{serial}.os.txt"),
+                "kf_osu": read_log_value(logs_dir / f"{serial}.kf.txt"),
+                "id_osu": read_log_value(logs_dir / f"{serial}.id.txt"),
+            }
+        )
+    return rows
+
+
+def read_log_value(path: Path) -> str:
+    """Read one install log value, returning an empty string when it is absent."""
+    if not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace").strip()
 
 
 def fetch_json(
