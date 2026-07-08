@@ -1,0 +1,5 @@
+{
+  "onsite_apk": "com.ses.onsite-debug-1.0.130.apk",
+  "launcher_apk": "Launcher3.apk",
+  "install_logs_dir": "install_logs"
+}
